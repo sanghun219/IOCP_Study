@@ -4,10 +4,7 @@
 #include <thread>
 #include <iostream>
 #include <vector>
-
-#pragma comment (lib,"ws2_32.lib")
-#define MAX_SOCKBUF 1024
-#define MAX_WORKERTHREAD 4
+#include "Define.h"
 
 // 코드 작성 후 느낌
 /*
@@ -19,31 +16,6 @@
 	Select - WSAWOULDBLOCK 으로 논블럭 처리
 	IOCP - 메인 스레드/ 작업 스레드 분리로 비동기 처리
 */
-
-enum IOOperation {
-	RECV,
-	SEND,
-};
-
-typedef struct stOverlappedEx {
-	WSAOVERLAPPED m_wsaOverlapped;
-	SOCKET m_socketClient;
-	WSABUF m_wsaBuf;
-	char m_szBuf[MAX_SOCKBUF];
-	IOOperation m_eOperation;
-};
-
-struct stClientInfo {
-	SOCKET m_socketClient;
-	stOverlappedEx m_stRecvOverlappedEx;
-	stOverlappedEx m_stSendOverlappedEx;
-
-	stClientInfo() {
-		m_socketClient = INVALID_SOCKET;
-		ZeroMemory(&m_stRecvOverlappedEx, sizeof(stOverlappedEx));
-		ZeroMemory(&m_stSendOverlappedEx, sizeof(stOverlappedEx));
-	}
-};
 
 class IOCompletionPort {
 public:
