@@ -26,5 +26,14 @@
     <ClInclude Include="Define.h">
       <Filter>소스 파일</Filter>
     </ClInclude>
+    <ClInclude Include="EchoServer.h">
+      <Filter>소스 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="Packet.h">
+      <Filter>소스 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="ClientInfo.h">
+      <Filter>소스 파일</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

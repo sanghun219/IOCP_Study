@@ -1,11 +1,11 @@
 #pragma once
-#include <WinSock2.h>
-#include <WS2tcpip.h>
-#include <thread>
-#include <iostream>
-#include <vector>
+#pragma comment(lib,"ws2_32.lib")
 #include "Define.h"
+#include "ClientInfo.h"
+#include <thread>
+#include <vector>
 
+// TODO : Select/IOCP 이해 [1주차]
 // 코드 작성 후 느낌
 /*
 	이해한 것은 블로킹/논블로킹에 관한 건이다. 기존의 Overlapped I/O 방식에서는 논블록 소켓으로 지정해
@@ -101,6 +101,17 @@ public:
 		if (mAccepterThread.joinable())
 			mAccepterThread.join();
 	}
+
+	// TODO : 서버와 세션의 분리
+	// 서버로부터 세션(Client)가 분리되었기에 해당 기능은 Client가 계승함.
+	bool SendMsg(const UINT32 sessionIndex_, const UINT32 dataSize_, char* pData) {
+		auto pClient = GetClientInfo(sessionIndex_);
+		return pClient->SendMsg(dataSize_, pData);
+	}
+
+	virtual void OnConnected(const UINT32 clientIndex_) {}
+	virtual void OnClose(const UINT32 clientIndex_) {}
+	virtual void OnReceive(const UINT32 clientIndex_, const UINT32 size_, char* pData) {}
 private:
 	void CreateClient(const UINT32 maxClientCount) {
 		for (int i = 0; i < maxClientCount; i++) {
@@ -126,59 +137,14 @@ private:
 
 	stClientInfo* GetEmptyClientInfo() {
 		for (auto& client : mClientInfos) {
-			if (INVALID_SOCKET == client.m_socketClient)
-			{
+			if (client.IsConnected() == false)
 				return &client;
-			}
 		}
 		return nullptr;
 	}
 
-	bool BindIOCompletionPort(stClientInfo* pClientInfo) {
-		auto hIOCP = CreateIoCompletionPort((HANDLE)pClientInfo->m_socketClient, mIOCPHandle
-			, (ULONG_PTR)(pClientInfo), 0);
-
-		if (nullptr == hIOCP) {
-			std::cout << "BindIOCompletionPort Error" << std::endl;
-			return false;
-		}
-		return true;
-	}
-
-	bool BindRecv(stClientInfo* pClientInfo) {
-		DWORD dwflag = 0;
-		DWORD dwRecvNumBytes = 0;
-
-		pClientInfo->m_stRecvOverlappedEx.m_wsaBuf.len = MAX_SOCKBUF;
-		pClientInfo->m_stRecvOverlappedEx.m_wsaBuf.buf = pClientInfo->m_stRecvOverlappedEx.m_szBuf;
-		pClientInfo->m_stRecvOverlappedEx.m_eOperation = IOOperation::RECV;
-
-		int nRet = WSARecv(pClientInfo->m_socketClient, &(pClientInfo->m_stRecvOverlappedEx.m_wsaBuf),
-			1, &dwRecvNumBytes, &dwflag, (LPWSAOVERLAPPED)&pClientInfo->m_stRecvOverlappedEx, NULL);
-
-		if (nRet == SOCKET_ERROR && (WSAGetLastError() != ERROR_IO_PENDING)) {
-			std::cout << "BindRecv Error" << std::endl;
-			return false;
-		}
-		return true;
-	}
-
-	bool SendMsg(stClientInfo* pClientInfo, char* pMsg, int nLen) {
-		DWORD dwRecvNumBytes = 0;
-		CopyMemory(pClientInfo->m_stSendOverlappedEx.m_szBuf, pMsg, nLen);
-
-		pClientInfo->m_stSendOverlappedEx.m_wsaBuf.len = nLen;
-		pClientInfo->m_stSendOverlappedEx.m_wsaBuf.buf = pClientInfo->m_stSendOverlappedEx.m_szBuf;
-		pClientInfo->m_stSendOverlappedEx.m_eOperation = IOOperation::SEND;
-
-		int nRet = WSASend(pClientInfo->m_socketClient, &(pClientInfo->m_stSendOverlappedEx.m_wsaBuf)
-			, 1, &dwRecvNumBytes, 0, (LPWSAOVERLAPPED)&pClientInfo->m_stRecvOverlappedEx.m_wsaOverlapped, NULL);
-
-		if (nRet == SOCKET_ERROR && (WSAGetLastError() != WSA_IO_PENDING)) {
-			std::cout << "SendMsg Error!" << std::endl;
-			return false;
-		}
-		return true;
+	stClientInfo* GetClientInfo(const UINT32 sessionIndex) {
+		return &mClientInfos[sessionIndex];
 	}
 
 	void WorkerThread() {
@@ -204,7 +170,6 @@ private:
 			}
 
 			if (FALSE == bSuccess || (0 == dwIoSize && TRUE == bSuccess)) {
-				std::cout << "socket(" << (int)pClientInfo->m_socketClient << ") 접속 끊김" << std::endl;
 				CloseSocket(pClientInfo);
 				continue;
 			}
@@ -212,37 +177,24 @@ private:
 			stOverlappedEx* pOverlappedEx = (stOverlappedEx*)lpOverlapped;
 
 			if (IOOperation::RECV == pOverlappedEx->m_eOperation) {
-				// Enum 값으로 패킷 id 분석후 어떻게 처리할지에 대한 구문이 들어갈 수 있음
-				pOverlappedEx->m_szBuf[dwIoSize] = NULL;
-				printf("[수신] bytes : %d, msg : %s\n", dwIoSize, pOverlappedEx->m_szBuf);
-
-				// 추가 작업
-				SendMsg(pClientInfo, pOverlappedEx->m_szBuf, dwIoSize);
-				BindRecv(pClientInfo);
+				OnReceive(pClientInfo->GetIndex(), dwIoSize, pClientInfo->RecvBuffer());
+				pClientInfo->BindRecv();
 			}
 			else if (IOOperation::SEND == pOverlappedEx->m_eOperation) {
-				printf("[송신] bytes : %d, msg : %s\n", dwIoSize, pOverlappedEx->m_szBuf);
+				delete[] pOverlappedEx->m_wsaBuf.buf;
+				delete pOverlappedEx;
+				pClientInfo->SendCompleted(dwIoSize);
 			}
 			else {
-				printf("socket(%d)에서 예외사항\n", pClientInfo->m_socketClient);
+				printf("socket(%d)에서 예외사항\n", pClientInfo->GetIndex());
 			}
 		}
 	}
 
 	void CloseSocket(stClientInfo* pClientInfo, bool bIsForce = false) {
-		struct linger stLinger = { 0,0 };
-
-		if (true == bIsForce) {
-			stLinger.l_onoff = 1;
-		}
-
-		shutdown(pClientInfo->m_socketClient, SD_BOTH);
-
-		setsockopt(pClientInfo->m_socketClient, SOL_SOCKET, SO_LINGER, (const char*)&stLinger, sizeof(stLinger));
-
-		closesocket(pClientInfo->m_socketClient);
-
-		pClientInfo->m_socketClient = INVALID_SOCKET;
+		auto clientIndex = pClientInfo->GetIndex();
+		pClientInfo->Close(bIsForce);
+		OnClose(clientIndex);
 	}
 	void AccepterThread() {
 		SOCKADDR_IN		stClientAddr;
@@ -255,22 +207,16 @@ private:
 				return;
 			}
 
-			pClientInfo->m_socketClient = accept(mListenSocket, (sockaddr*)&stClientAddr, &nAddrIn);
-			if (INVALID_SOCKET == pClientInfo->m_socketClient) {
+			auto newSocket = accept(mListenSocket, (sockaddr*)&stClientAddr, &nAddrIn);
+			if (INVALID_SOCKET == newSocket) {
 				continue;
 			}
-			bool bRet = BindIOCompletionPort(pClientInfo);
-			if (false == bRet) {
-				return;
-			}
-			bRet = BindRecv(pClientInfo);
-			if (false == bRet) {
+			if (pClientInfo->OnConnect(mIOCPHandle, newSocket) == false) {
+				pClientInfo->Close(true);
 				return;
 			}
 
-			char ClientIP[32] = { 0, };
-			inet_ntop(AF_INET, &(stClientAddr.sin_addr), ClientIP, 32 - 1);
-			printf("클라이언트 접속 : IP(%s) SOCKET(%d)\n", ClientIP, (int)pClientInfo->m_socketClient);
+			OnConnected(pClientInfo->GetIndex());
 
 			++mClientCnt;
 		}

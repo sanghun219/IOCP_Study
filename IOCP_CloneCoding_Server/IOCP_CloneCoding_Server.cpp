@@ -2,17 +2,17 @@
 //
 
 #include <iostream>
-#include "IOCompletionPort.h"
+#include  "EchoServer.h"
 
 const UINT16 SERVER_PORT = 32000;
 const UINT16 MAX_CLIENT = 100;
 
 int main()
 {
-	IOCompletionPort ioCompletionPort;
-	ioCompletionPort.InitSocket();
-	ioCompletionPort.BindandListen(SERVER_PORT);
-	ioCompletionPort.StartServer(MAX_CLIENT);
+	EchoServer Server;
+	Server.InitSocket();
+	Server.BindandListen(SERVER_PORT);
+	Server.StartServer(MAX_CLIENT);
 
 	printf("아무 키나 누를때 까지 대기합니다.\n");
 	getchar();
