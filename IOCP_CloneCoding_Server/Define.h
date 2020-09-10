@@ -1,21 +1,23 @@
 #pragma once
 #include <WinSock2.h>
 #include <WS2tcpip.h>
-
+#include <MSWSock.h>
+#include <chrono>
 const UINT32 MAX_SOCKBUF = 256;
 const UINT32 MAX_WORKERTHREAD = 4;
+const UINT64 RE_USE_SESSION_WAIT_TIMESEC = 3;
 
 enum IOOperation {
 	RECV,
 	SEND,
+	ACCEPT,
 };
 
 typedef struct stOverlappedEx {
 	WSAOVERLAPPED m_wsaOverlapped;
-	SOCKET m_socketClient;
 	WSABUF m_wsaBuf;
-	char m_szBuf[MAX_SOCKBUF];
 	IOOperation m_eOperation;
+	UINT32 SessionIndex;
 };
 
 struct stClientInfo {

@@ -1,5 +1,6 @@
 #pragma once
 #pragma comment(lib,"ws2_32.lib")
+#pragma comment(lib,"mswsock.lib")
 #include "Define.h"
 #include "ClientInfo.h"
 #include <thread>
@@ -115,7 +116,9 @@ public:
 private:
 	void CreateClient(const UINT32 maxClientCount) {
 		for (int i = 0; i < maxClientCount; i++) {
-			mClientInfos.emplace_back();
+			auto client = new stClientInfo;
+			client->Init(i, mIOCPHandle);
+			mClientInfos.push_back(client);
 		}
 	}
 
@@ -137,14 +140,14 @@ private:
 
 	stClientInfo* GetEmptyClientInfo() {
 		for (auto& client : mClientInfos) {
-			if (client.IsConnected() == false)
-				return &client;
+			if (client->IsConnected() == false)
+				return client;
 		}
 		return nullptr;
 	}
 
 	stClientInfo* GetClientInfo(const UINT32 sessionIndex) {
-		return &mClientInfos[sessionIndex];
+		return mClientInfos[sessionIndex];
 	}
 
 	void WorkerThread() {
@@ -169,20 +172,29 @@ private:
 				continue;
 			}
 
-			if (FALSE == bSuccess || (0 == dwIoSize && TRUE == bSuccess)) {
+			stOverlappedEx* pOverlappedEx = (stOverlappedEx*)lpOverlapped;
+
+			if (FALSE == bSuccess || (0 == dwIoSize && IOOperation::ACCEPT != pOverlappedEx->m_eOperation)) {
 				CloseSocket(pClientInfo);
 				continue;
 			}
 
-			stOverlappedEx* pOverlappedEx = (stOverlappedEx*)lpOverlapped;
+			if (IOOperation::ACCEPT == pOverlappedEx->m_eOperation) {
+				pClientInfo = GetClientInfo(pOverlappedEx->SessionIndex);
+				if (pClientInfo->AcceptCompletion()) {
+					++mClientCnt;
+					OnConnected(pClientInfo->GetIndex());
+				}
+				else {
+					CloseSocket(pClientInfo, true);
+				}
+			}
 
-			if (IOOperation::RECV == pOverlappedEx->m_eOperation) {
+			else if (IOOperation::RECV == pOverlappedEx->m_eOperation) {
 				OnReceive(pClientInfo->GetIndex(), dwIoSize, pClientInfo->RecvBuffer());
 				pClientInfo->BindRecv();
 			}
 			else if (IOOperation::SEND == pOverlappedEx->m_eOperation) {
-				delete[] pOverlappedEx->m_wsaBuf.buf;
-				delete pOverlappedEx;
 				pClientInfo->SendCompleted(dwIoSize);
 			}
 			else {
@@ -196,29 +208,30 @@ private:
 		pClientInfo->Close(bIsForce);
 		OnClose(clientIndex);
 	}
+	// TODO : 왜 일정 시간동안 Close된 세션에 대해서 Accept를 받지 않는가?
 	void AccepterThread() {
-		SOCKADDR_IN		stClientAddr;
-		int nAddrIn = sizeof(SOCKADDR_IN);
-
 		while (mIsAccepterRun) {
-			stClientInfo* pClientInfo = GetEmptyClientInfo();
-			if (NULL == pClientInfo) {
-				std::cout << "AccepterThread Error : stClientInfo is Null" << std::endl;
-				return;
-			}
+			auto curTimeSec = std::chrono::duration_cast<std::chrono::seconds>(
+				std::chrono::steady_clock::now().time_since_epoch()
+				).count();
 
-			auto newSocket = accept(mListenSocket, (sockaddr*)&stClientAddr, &nAddrIn);
-			if (INVALID_SOCKET == newSocket) {
-				continue;
-			}
-			if (pClientInfo->OnConnect(mIOCPHandle, newSocket) == false) {
-				pClientInfo->Close(true);
-				return;
-			}
+			for (auto client : mClientInfos) {
+				if (client->IsConnected()) {
+					continue;
+				}
 
-			OnConnected(pClientInfo->GetIndex());
+				if ((UINT64)curTimeSec < client->GetLatestClosedTimeSec()) {
+					continue;
+				}
 
-			++mClientCnt;
+				auto diff = curTimeSec - client->GetLatestClosedTimeSec();
+				if (diff <= RE_USE_SESSION_WAIT_TIMESEC) {
+					continue;
+				}
+
+				client->PostAccept(mListenSocket, curTimeSec);
+			}
+			std::this_thread::sleep_for(std::chrono::microseconds(32));
 		}
 	}
 private:
@@ -228,6 +241,6 @@ private:
 	bool mIsAccepterRun;
 	std::vector<std::thread> mIOWorkerThread;
 	std::thread mAccepterThread;
-	std::vector<stClientInfo> mClientInfos;
+	std::vector<stClientInfo*> mClientInfos;
 	int mClientCnt;
 };
